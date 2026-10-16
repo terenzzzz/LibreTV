@@ -48,7 +48,7 @@ export function preferredH264Info(): CodecInfo {
   return {
     kind: 'h264',
     label: '可投屏（已避开 H.265）',
-    hint: '此源也提供 H.265，已自动改用 H.264，方便 AirPlay 出画。',
+    hint: '源编码：H.264 / H.265（混编）。目前编码：H.264（已自动改用，方便 AirPlay 出画）。',
   };
 }
 
@@ -59,27 +59,27 @@ export function toCodecInfo(c: CodecFlags): CodecInfo {
     return {
       kind: 'h265',
       label: '投屏可能无画面',
-      hint: '当前是 H.265。本机可正常观看；用 AirPlay 投到 Apple TV 时，常常只有声音没有画面。',
+      hint: '源编码：H.265。目前编码：H.265。本机可正常观看；用 AirPlay 投到 Apple TV 时，常常只有声音没有画面。',
     };
   }
   if (c.has264) {
     return {
       kind: 'h264',
       label: '可投屏',
-      hint: '当前是 H.264，AirPlay 投到 Apple TV 一般能正常出画。',
+      hint: '源编码：H.264。目前编码：H.264。AirPlay 投到 Apple TV 一般能正常出画。',
     };
   }
   if (c.hasAv1) {
     return {
       kind: 'av1',
       label: '投屏可能异常',
-      hint: '当前是 AV1，AirPlay 兼容性较差，建议换源后再投屏。',
+      hint: '源编码：AV1。目前编码：AV1。AirPlay 兼容性较差，建议换源后再投屏。',
     };
   }
   return {
     kind: 'unknown',
     label: '编码未识别',
-    hint: '不影响本机播放。若投屏只有声音，多半是 H.265，可换源再试。',
+    hint: '源编码 / 目前编码均未识别。不影响本机播放。若投屏只有声音，多半是 H.265，可换源再试。',
   };
 }
 
@@ -110,12 +110,13 @@ export function levelListHasCodecLabels(levels: Array<{ videoCodec?: string }>):
 }
 
 /**
- * 单段探测若同时命中 H.264/H.265，多为 TS NAL 误判。
- * HEVC 的 VPS/SPS（32–34）更特异：有则判 H.265；否则判 H.264。
+ * 单段同时命中时的收敛：优先相信更干净的信号。
+ * 旧逻辑一律偏 H.265，会把「真 H.264 + 松散 PMT/假 start code」误判成纯 H.265。
  */
 export function resolveAmbiguousFlags(flags: CodecFlags): CodecFlags {
   if (!(flags.has264 && flags.has265)) return flags;
-  return { has264: false, has265: true, hasAv1: flags.hasAv1 };
+  // 单 ES 分片不可能真混编；Ambiguous 时偏 H.264（投屏更稳，且与假 HEVC 信号更吻合）
+  return { has264: true, has265: false, hasAv1: flags.hasAv1 };
 }
 
 function proxyUrl(url: string): string {
@@ -150,21 +151,123 @@ function findFourCC(u8: Uint8Array, ascii: string): boolean {
   return false;
 }
 
+/** 在 MPEG-TS 中找 188 字节对齐的 sync 起点 */
+function findTsSync(buf: Uint8Array): number {
+  for (let s = 0; s < Math.min(buf.length, 188); s++) {
+    if (buf[s] === 0x47 && s + 188 < buf.length && buf[s + 188] === 0x47) return s;
+  }
+  return -1;
+}
+
+/**
+ * 按 PMT 表结构读 stream_type（0x1B=AVC, 0x24=HEVC）。
+ * 旧实现在「疑似 PMT 头」后 400 字节内盲扫 0x24，极易误触。
+ */
+export function parseTsPmtFlags(buf: Uint8Array): CodecFlags {
+  const out = emptyFlags();
+  const sync = findTsSync(buf);
+  if (sync < 0) return out;
+
+  for (let off = sync; off + 188 <= buf.length; off += 188) {
+    if (buf[off] !== 0x47) continue;
+    const payloadUnitStart = (buf[off + 1] & 0x40) !== 0;
+    const afc = (buf[off + 3] >> 4) & 0x3;
+    let p = off + 4;
+    if (afc === 2 || afc === 3) {
+      if (p >= off + 188) continue;
+      p += 1 + buf[p];
+    }
+    if (afc === 0 || p >= off + 188) continue;
+    if (payloadUnitStart) {
+      if (p >= off + 188) continue;
+      p += 1 + buf[p];
+    }
+    if (p + 12 >= off + 188) continue;
+    if (buf[p] !== 0x02) continue; // table_id = PMT
+
+    const sectionLength = ((buf[p + 1] & 0x0f) << 8) | buf[p + 2];
+    const programInfoLength = ((buf[p + 10] & 0x0f) << 8) | buf[p + 11];
+    let q = p + 12 + programInfoLength;
+    const end = Math.min(p + 3 + sectionLength - 4, off + 188);
+    while (q + 5 <= end) {
+      const streamType = buf[q];
+      const esInfoLen = ((buf[q + 3] & 0x0f) << 8) | buf[q + 4];
+      if (streamType === 0x1b || streamType === 0x20 || streamType === 0x27) out.has264 = true;
+      if (streamType === 0x24 || streamType === 0x25) out.has265 = true;
+      q += 5 + esInfoLen;
+    }
+  }
+  return out;
+}
+
+interface NalCodecHits {
+  avcSps: number;
+  avcPps: number;
+  hevcVps: number;
+  hevcSps: number;
+  hevcPps: number;
+}
+
+/** HEVC NAL 头需 layer_id=0 且 temporal_id_plus1>=1，过滤码流里的假 start code */
+function hevcNalHeaderOk(buf: Uint8Array, nalPos: number, firstByte: number): boolean {
+  if (nalPos + 1 >= buf.length) return false;
+  const b1 = buf[nalPos + 1];
+  const layerId = ((firstByte & 1) << 5) | (b1 >> 3);
+  const tidPlus1 = b1 & 0x07;
+  return layerId === 0 && tidPlus1 >= 1;
+}
+
+export function scanAnnexBNalHits(buf: Uint8Array): NalCodecHits {
+  const hits: NalCodecHits = { avcSps: 0, avcPps: 0, hevcVps: 0, hevcSps: 0, hevcPps: 0 };
+  for (let k = 0; k < buf.length - 5; k++) {
+    let nalPos = -1;
+    if (buf[k] === 0 && buf[k + 1] === 0 && buf[k + 2] === 1) nalPos = k + 3;
+    else if (buf[k] === 0 && buf[k + 1] === 0 && buf[k + 2] === 0 && buf[k + 3] === 1) nalPos = k + 4;
+    if (nalPos < 0 || nalPos >= buf.length) continue;
+    const nb = buf[nalPos];
+
+    const hevcType = (nb >> 1) & 0x3f;
+    if ((hevcType === 32 || hevcType === 33 || hevcType === 34) && hevcNalHeaderOk(buf, nalPos, nb)) {
+      if (hevcType === 32) hits.hevcVps++;
+      else if (hevcType === 33) hits.hevcSps++;
+      else hits.hevcPps++;
+    }
+
+    const avcType = nb & 0x1f;
+    if ((nb & 0x80) === 0 && avcType === 7) hits.avcSps++;
+    if ((nb & 0x80) === 0 && avcType === 8) hits.avcPps++;
+  }
+  return hits;
+}
+
+function flagsFromNalHits(hits: NalCodecHits): CodecFlags {
+  const out = emptyFlags();
+  // 真 HEVC 分片通常能扫到 VPS，并伴随 SPS/PPS；单凭零散「像 VPS」的假 start code 不够
+  const strongHevc = hits.hevcVps >= 1 && (hits.hevcSps >= 1 || hits.hevcPps >= 1);
+  const weakHevc = hits.hevcVps >= 1;
+  const avc = hits.avcSps >= 1;
+
+  if (strongHevc && !avc) {
+    out.has265 = true;
+    return out;
+  }
+  if (avc && !strongHevc) {
+    out.has264 = true;
+    return out;
+  }
+  if (strongHevc && avc) {
+    // 单段双信号：SPS/PPS 对 AVC 更稳；强 HEVC 同时出现时仍标 265（少见）
+    out.has265 = true;
+    return out;
+  }
+  if (weakHevc) out.has265 = true;
+  else if (hits.avcPps >= 1) out.has264 = true;
+  return out;
+}
+
 export function detectFromBytes(buf: Uint8Array): CodecFlags {
   const out = emptyFlags();
   if (buf.length < 16) return out;
-
-  const fromBox =
-    findFourCC(buf, 'hvc1') ||
-    findFourCC(buf, 'hev1') ||
-    findFourCC(buf, 'hvcC') ||
-    findFourCC(buf, 'dvh1') ||
-    findFourCC(buf, 'dvhe') ||
-    findFourCC(buf, 'avc1') ||
-    findFourCC(buf, 'avc3') ||
-    findFourCC(buf, 'avcC') ||
-    findFourCC(buf, 'av01') ||
-    findFourCC(buf, 'av1C');
 
   if (findFourCC(buf, 'hvc1') || findFourCC(buf, 'hev1') || findFourCC(buf, 'hvcC') || findFourCC(buf, 'dvh1') || findFourCC(buf, 'dvhe')) {
     out.has265 = true;
@@ -175,42 +278,22 @@ export function detectFromBytes(buf: Uint8Array): CodecFlags {
   if (findFourCC(buf, 'av01') || findFourCC(buf, 'av1C')) {
     out.hasAv1 = true;
   }
-  if (fromBox) return out;
+  if (hasAnyCodec(out)) return out;
 
-  let isTs = false;
-  for (let s = 0; s < Math.min(buf.length, 188); s++) {
-    if (buf[s] === 0x47 && s + 188 < buf.length && buf[s + 188] === 0x47) {
-      isTs = true;
-      break;
-    }
-  }
-  if (!isTs) return out;
+  if (findTsSync(buf) < 0) return out;
 
-  for (let i = 0; i < buf.length - 6; i++) {
-    if (buf[i] === 0x02 && (buf[i + 1] & 0xf0) === 0xb0) {
-      const end = Math.min(buf.length, i + 400);
-      for (let j = i + 12; j < end; j++) {
-        const st = buf[j];
-        if (st === 0x1b || st === 0x20 || st === 0x27) out.has264 = true;
-        if (st === 0x24 || st === 0x25) out.has265 = true;
-      }
-    }
-  }
+  // 1) 结构化 PMT（高置信）
+  const pmt = parseTsPmtFlags(buf);
+  if (pmt.has264 && !pmt.has265) return pmt;
+  if (pmt.has265 && !pmt.has264) return pmt;
 
-  for (let k = 0; k < buf.length - 5; k++) {
-    let nalPos = -1;
-    if (buf[k] === 0 && buf[k + 1] === 0 && buf[k + 2] === 1) nalPos = k + 3;
-    else if (buf[k] === 0 && buf[k + 1] === 0 && buf[k + 2] === 0 && buf[k + 3] === 1) nalPos = k + 4;
-    if (nalPos < 0 || nalPos >= buf.length) continue;
-    const nb = buf[nalPos];
-    const hevcType = (nb >> 1) & 0x3f;
-    if (hevcType === 32 || hevcType === 33 || hevcType === 34) out.has265 = true;
-    const avcType = nb & 0x1f;
-    if ((nb & 0x80) === 0 && (avcType === 7 || avcType === 8)) out.has264 = true;
-  }
+  // 2) Annex-B NAL（收紧 HEVC 头校验）
+  const nal = flagsFromNalHits(scanAnnexBNalHits(buf));
+  if (hasAnyCodec(nal)) return nal;
 
-  // TS 启发式容易双命中，收敛为单一编码
-  return resolveAmbiguousFlags(out);
+  // 3) PMT 双命中等残局
+  if (hasAnyCodec(pmt)) return resolveAmbiguousFlags(pmt);
+  return out;
 }
 
 function parseMasterChildren(text: string): { flags: CodecFlags; childUrls: string[] } {
