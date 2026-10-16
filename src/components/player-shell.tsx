@@ -12,6 +12,12 @@ import {
 } from '@/lib/video-prefetcher';
 import { loadCacheSettings } from '@/lib/video-cache';
 import { formatTime } from '@/lib/utils';
+import {
+  classifyCodecText,
+  hasAnyCodec,
+  toCodecInfo,
+  type CodecInfo,
+} from '@/lib/stream-codec';
 
 /**
  * 播放器外壳：ArtPlayer + hls.js（旧版 player.js 的 React 化）。
@@ -40,6 +46,8 @@ interface PlayerShellProps {
   onPause?: (position: number, duration: number) => void;
   /** 恢复策略判源不可用（重试耗尽/格式硬失败）时回调：父级弹出换源面板 */
   onRequestSwitchSource?: (reason: string) => void;
+  /** HLS 清单解析出的视频编码（供播放页投屏提示） */
+  onCodecInfo?: (info: CodecInfo) => void;
 }
 
 export function PlayerShell({
@@ -55,6 +63,7 @@ export function PlayerShell({
   onEnded,
   onPause,
   onRequestSwitchSource,
+  onCodecInfo,
 }: PlayerShellProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -69,11 +78,11 @@ export function PlayerShell({
   // 始终持有最新 props/回调，避免重建播放器
   const propsRef = useRef({
     url, title, adFilter, autoplayNext, episodeKey, nextUrl, nextEpisodeKey,
-    getRestorePosition, onTimeUpdate, onEnded, onPause, onRequestSwitchSource,
+    getRestorePosition, onTimeUpdate, onEnded, onPause, onRequestSwitchSource, onCodecInfo,
   });
   propsRef.current = {
     url, title, adFilter, autoplayNext, episodeKey, nextUrl, nextEpisodeKey,
-    getRestorePosition, onTimeUpdate, onEnded, onPause, onRequestSwitchSource,
+    getRestorePosition, onTimeUpdate, onEnded, onPause, onRequestSwitchSource, onCodecInfo,
   };
 
   // 跨集共享、每次换集重置的播放链路状态
@@ -162,8 +171,15 @@ export function PlayerShell({
     hls.loadSource(mediaUrl);
     hls.attachMedia(video);
 
-    hls.on(Hls.Events.MANIFEST_PARSED, async () => {
+    hls.on(Hls.Events.MANIFEST_PARSED, async (_evt, data) => {
       recoveryRef.current?.markHealthy();
+      try {
+        const joined = (data.levels || [])
+          .map((level) => `${level.videoCodec || ''},${level.audioCodec || ''}`)
+          .join('|');
+        const flags = classifyCodecText(joined);
+        if (hasAnyCodec(flags)) propsRef.current.onCodecInfo?.(toCodecInfo(flags));
+      } catch { /* 编码提示失败不影响播放 */ }
       // 预取锚点：恢复进度时直接取恢复目标。赋值后 video.currentTime 未必立刻反映
       // （Safari 系），而 ensure 是以「锚点未变」为前提复用 parsing 中的运行的——
       // 这里读到旧值会把窗口建在片头，且白等一次纠错重建。

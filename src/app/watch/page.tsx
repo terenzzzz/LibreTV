@@ -19,6 +19,7 @@ import { EmptyState, LoadingState, Spinner } from '@/components/states';
 import { SwitchSourceModal } from '@/components/switch-source';
 import { enqueueDownload } from '@/components/download-manager';
 import { Icon } from '@/components/icon';
+import { CodecHint } from '@/components/codec-hint';
 import { useAuth } from '@/components/auth';
 import { resolveSource, useAppStore } from '@/lib/store';
 import {
@@ -30,6 +31,7 @@ import {
   db,
 } from '@/lib/db';
 import { cn } from '@/lib/utils';
+import type { CodecInfo } from '@/lib/stream-codec';
 
 /**
  * 播放页（唯一入口，替代旧版 watch.html → player.html 跳转链）。
@@ -58,6 +60,7 @@ function WatchContent() {
 
   const [reversed, setReversed] = useState(false);
   const [switchOpen, setSwitchOpen] = useState(false);
+  const [codecFromPlayer, setCodecFromPlayer] = useState<CodecInfo | null>(null);
 
   const source = resolveSource(store, sourceKey, {
     url: searchParams.get('sourceUrl') || undefined,
@@ -83,6 +86,11 @@ function WatchContent() {
     }
     return directUrl;
   }, [episodes, indexParam, directUrl]);
+
+  // 换集时清掉上一集的播放器编码结果，交给探测/下一轮 MANIFEST_PARSED
+  useEffect(() => {
+    setCodecFromPlayer(null);
+  }, [currentUrl]);
 
   const currentIndex = useMemo(() => {
     if (episodes.length > 0) return Math.min(Math.max(indexParam, 0), episodes.length - 1);
@@ -248,6 +256,7 @@ function WatchContent() {
                   onTimeUpdate={handleProgress}
                   onPause={handleProgress}
                   onEnded={handleEnded}
+                  onCodecInfo={setCodecFromPlayer}
                 />
               ) : (
                 <div className="w-full h-full flex items-center justify-center">
@@ -330,6 +339,7 @@ function WatchContent() {
                 ))}
               </div>
             )}
+            <CodecHint url={currentUrl || undefined} fromPlayer={codecFromPlayer} />
             <p className="hidden md:block text-[10px] text-faint mt-3 leading-relaxed">
               快捷键：空格 播放/暂停 · ←/→ 快退/快进 5s · ↑/↓ 音量 · F 全屏 · Alt+←/→ 切换集数
             </p>
