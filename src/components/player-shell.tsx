@@ -14,7 +14,10 @@ import { loadCacheSettings } from '@/lib/video-cache';
 import { formatTime } from '@/lib/utils';
 import {
   classifyCodecText,
+  findBestH264LevelIndex,
   hasAnyCodec,
+  levelListHasHevc,
+  preferredH264Info,
   toCodecInfo,
   type CodecInfo,
 } from '@/lib/stream-codec';
@@ -174,11 +177,37 @@ export function PlayerShell({
     hls.on(Hls.Events.MANIFEST_PARSED, async (_evt, data) => {
       recoveryRef.current?.markHealthy();
       try {
-        const joined = (data.levels || [])
+        const levels = data.levels || [];
+        const joined = levels
           .map((level) => `${level.videoCodec || ''},${level.audioCodec || ''}`)
           .join('|');
         const flags = classifyCodecText(joined);
-        if (hasAnyCodec(flags)) propsRef.current.onCodecInfo?.(toCodecInfo(flags));
+        // 混编且播放器无清晰度选项：从 H.264 起播，并拦截 ABR 切到 H.265（AirPlay 常无画面）
+        const h264Idx = findBestH264LevelIndex(levels);
+        if (h264Idx >= 0 && levelListHasHevc(levels)) {
+          const h264Indexes = levels
+            .map((level, i) => (/avc[1-4]/i.test(level.videoCodec || '') ? i : -1))
+            .filter((i) => i >= 0);
+          hls.startLevel = h264Idx;
+          hls.on(Hls.Events.LEVEL_SWITCHING, (_e, sw) => {
+            const codec = hls.levels[sw.level]?.videoCodec || '';
+            if (!/hvc1|hev1|dvh1|dvhe/i.test(codec)) return;
+            const targetBr = hls.levels[sw.level]?.bitrate ?? 0;
+            let best = h264Idx;
+            let bestDiff = Number.POSITIVE_INFINITY;
+            for (const i of h264Indexes) {
+              const diff = Math.abs((hls.levels[i]?.bitrate ?? 0) - targetBr);
+              if (diff < bestDiff) {
+                bestDiff = diff;
+                best = i;
+              }
+            }
+            hls.nextLevel = best;
+          });
+          propsRef.current.onCodecInfo?.(preferredH264Info());
+        } else if (hasAnyCodec(flags)) {
+          propsRef.current.onCodecInfo?.(toCodecInfo(flags));
+        }
       } catch { /* 编码提示失败不影响播放 */ }
       // 预取锚点：恢复进度时直接取恢复目标。赋值后 video.currentTime 未必立刻反映
       // （Safari 系），而 ensure 是以「锚点未变」为前提复用 parsing 中的运行的——

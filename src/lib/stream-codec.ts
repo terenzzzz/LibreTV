@@ -48,7 +48,7 @@ export function toCodecInfo(c: CodecFlags): CodecInfo {
     return {
       kind: 'mixed',
       label: 'H.264 / H.265',
-      hint: '多码率混编 · 投屏请选 H.264 清晰度',
+      hint: '源含多种编码；播放器无清晰度可选时，AirPlay 能否出画取决于实际拉到的流',
     };
   }
   if (c.has265) {
@@ -77,6 +77,39 @@ export function toCodecInfo(c: CodecFlags): CodecInfo {
     label: '编码未知',
     hint: '清单未声明 CODECS，且无法从分片识别',
   };
+}
+
+/** 混编时优先 H.264 后的展示文案 */
+export function preferredH264Info(): CodecInfo {
+  return {
+    kind: 'h264',
+    label: 'H.264（已优先）',
+    hint: '源同时含 H.265，已自动锁定 H.264 便于 AirPlay',
+  };
+}
+
+/** 在 levels 里找码率最高的 H.264 档，找不到返回 -1 */
+export function findBestH264LevelIndex(
+  levels: Array<{ videoCodec?: string; bitrate?: number }>
+): number {
+  let best = -1;
+  let bestBr = -1;
+  for (let i = 0; i < levels.length; i++) {
+    const codec = levels[i]?.videoCodec || '';
+    if (!/avc[1-4]/i.test(codec)) continue;
+    const br = levels[i]?.bitrate ?? 0;
+    if (br >= bestBr) {
+      bestBr = br;
+      best = i;
+    }
+  }
+  return best;
+}
+
+export function levelListHasHevc(
+  levels: Array<{ videoCodec?: string }>
+): boolean {
+  return levels.some((l) => /hvc1|hev1|dvh1|dvhe/i.test(l.videoCodec || ''));
 }
 
 function proxyUrl(url: string): string {
