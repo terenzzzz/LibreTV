@@ -8,8 +8,8 @@ out/
 vitest-results.json
 *.log
 
-# 部署机本地备份 / 热更新软链
-codec-badge.js
+# 根目录软链（真实文件在 public/codec-badge.js，nginx 可热更新）
+/codec-badge.js
 
 # AI 工具产物（本机会话/缓存数据，不入库）
 .mimosa/
