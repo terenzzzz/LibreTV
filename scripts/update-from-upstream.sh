@@ -24,8 +24,13 @@ if ! git merge --no-edit origin/main; then
 fi
 
 echo "==> build & restart"
-docker compose build
-docker compose up -d
+if docker info >/dev/null 2>&1; then
+  DC=(docker compose)
+else
+  DC=(sudo docker compose)
+fi
+"${DC[@]}" build
+"${DC[@]}" up -d
 
 echo "==> done"
-docker compose ps
+"${DC[@]}" ps
