@@ -14,14 +14,16 @@ import { loadCacheSettings } from '@/lib/video-cache';
 import { formatTime } from '@/lib/utils';
 import {
   classifyCodecText,
+  classifyHlsLevels,
   findBestH264LevelIndex,
   hasAnyCodec,
+  levelListHasCodecLabels,
   levelListHasHevc,
+  pickBestH264FromClassified,
   preferredH264Info,
   toCodecInfo,
   type CodecInfo,
 } from '@/lib/stream-codec';
-
 /**
  * 播放器外壳：ArtPlayer + hls.js（旧版 player.js 的 React 化）。
  * 保留：广告分片过滤、自动连播回调、进度回调、快捷键、移动端长按倍速、错误恢复。
@@ -31,6 +33,76 @@ import {
  * 而不销毁重建。否则在「网页全屏（页面全屏）」下整实例重建会丢失全屏上下文、
  * 重建 <video> 元素，触发「黑屏有声」的渲染竞态。
  */
+
+/** 锁定到 H.264 各档，并拦截切到 H.265 */
+function lockToH264Levels(
+  hls: Hls,
+  h264Indexes: number[],
+  best: number,
+  onCodecInfo?: (info: CodecInfo) => void
+) {
+  if (h264Indexes.length === 0) return;
+  hls.startLevel = best;
+  hls.nextLevel = best;
+  hls.on(Hls.Events.LEVEL_SWITCHING, (_e, sw) => {
+    if (h264Indexes.includes(sw.level)) return;
+    const targetBr = hls.levels[sw.level]?.bitrate ?? 0;
+    let pick = best;
+    let bestDiff = Number.POSITIVE_INFINITY;
+    for (const i of h264Indexes) {
+      const diff = Math.abs((hls.levels[i]?.bitrate ?? 0) - targetBr);
+      if (diff < bestDiff) {
+        bestDiff = diff;
+        pick = i;
+      }
+    }
+    hls.nextLevel = pick;
+  });
+  onCodecInfo?.(preferredH264Info());
+}
+
+async function applyCodecPreference(
+  hls: Hls,
+  levels: Array<{ videoCodec?: string; audioCodec?: string; url?: string | string[]; bitrate?: number }>,
+  onCodecInfo?: (info: CodecInfo) => void
+) {
+  const notify = onCodecInfo;
+  const joined = levels.map((level) => `${level.videoCodec || ''},${level.audioCodec || ''}`).join('|');
+  const flags = classifyCodecText(joined);
+
+  // 1) 清单已声明 CODECS：直接按标签优选
+  const labeledH264 = findBestH264LevelIndex(levels);
+  if (labeledH264 >= 0 && levelListHasHevc(levels)) {
+    const h264Indexes = levels
+      .map((level, i) => (/avc[1-4]/i.test(level.videoCodec || '') ? i : -1))
+      .filter((i) => i >= 0);
+    lockToH264Levels(hls, h264Indexes, labeledH264, notify);
+    return;
+  }
+  if (levelListHasCodecLabels(levels) && hasAnyCodec(flags)) {
+    notify?.(toCodecInfo(flags));
+    return;
+  }
+
+  // 2) 无 CODECS（国内源常见）：逐档探测分片，再锁定 H.264
+  if (levels.length === 0) return;
+  const classified = await classifyHlsLevels(levels);
+  const picked = pickBestH264FromClassified(classified);
+  const hasHevc = classified.some((c) => c.kind === 'h265');
+  if (picked && hasHevc) {
+    lockToH264Levels(hls, picked.h264Indexes, picked.best, notify);
+    return;
+  }
+  if (picked && !hasHevc) {
+    notify?.(toCodecInfo({ has264: true, has265: false, hasAv1: false }));
+    return;
+  }
+  if (hasHevc) {
+    notify?.(toCodecInfo({ has264: false, has265: true, hasAv1: false }));
+    return;
+  }
+  if (hasAnyCodec(flags)) notify?.(toCodecInfo(flags));
+}
 
 interface PlayerShellProps {
   url: string;
@@ -177,37 +249,9 @@ export function PlayerShell({
     hls.on(Hls.Events.MANIFEST_PARSED, async (_evt, data) => {
       recoveryRef.current?.markHealthy();
       try {
-        const levels = data.levels || [];
-        const joined = levels
-          .map((level) => `${level.videoCodec || ''},${level.audioCodec || ''}`)
-          .join('|');
-        const flags = classifyCodecText(joined);
-        // 混编且播放器无清晰度选项：从 H.264 起播，并拦截 ABR 切到 H.265（AirPlay 常无画面）
-        const h264Idx = findBestH264LevelIndex(levels);
-        if (h264Idx >= 0 && levelListHasHevc(levels)) {
-          const h264Indexes = levels
-            .map((level, i) => (/avc[1-4]/i.test(level.videoCodec || '') ? i : -1))
-            .filter((i) => i >= 0);
-          hls.startLevel = h264Idx;
-          hls.on(Hls.Events.LEVEL_SWITCHING, (_e, sw) => {
-            const codec = hls.levels[sw.level]?.videoCodec || '';
-            if (!/hvc1|hev1|dvh1|dvhe/i.test(codec)) return;
-            const targetBr = hls.levels[sw.level]?.bitrate ?? 0;
-            let best = h264Idx;
-            let bestDiff = Number.POSITIVE_INFINITY;
-            for (const i of h264Indexes) {
-              const diff = Math.abs((hls.levels[i]?.bitrate ?? 0) - targetBr);
-              if (diff < bestDiff) {
-                bestDiff = diff;
-                best = i;
-              }
-            }
-            hls.nextLevel = best;
-          });
-          propsRef.current.onCodecInfo?.(preferredH264Info());
-        } else if (hasAnyCodec(flags)) {
-          propsRef.current.onCodecInfo?.(toCodecInfo(flags));
-        }
+        await applyCodecPreference(hls, data.levels || [], (info) => {
+          propsRef.current.onCodecInfo?.(info);
+        });
       } catch { /* 编码提示失败不影响播放 */ }
       // 预取锚点：恢复进度时直接取恢复目标。赋值后 video.currentTime 未必立刻反映
       // （Safari 系），而 ensure 是以「锚点未变」为前提复用 parsing 中的运行的——

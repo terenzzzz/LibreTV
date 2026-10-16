@@ -43,14 +43,18 @@ export function classifyCodecText(text: string): CodecFlags {
   };
 }
 
+/** 混编且已自动避开 H.265 */
+export function preferredH264Info(): CodecInfo {
+  return {
+    kind: 'h264',
+    label: '可投屏（已避开 H.265）',
+    hint: '此源也提供 H.265，已自动改用 H.264，方便 AirPlay 出画。',
+  };
+}
+
 export function toCodecInfo(c: CodecFlags): CodecInfo {
-  if (c.has265 && c.has264) {
-    return {
-      kind: 'mixed',
-      label: '投屏不稳定',
-      hint: '此源同时有 H.264 和 H.265。手机/电脑上看一般没问题；投到 Apple TV 若只有声音，请换一个源再试。',
-    };
-  }
+  // 只要有 H.264 可选，就按「已优先 H.264」展示（播放器侧会真正锁到 H.264 档）
+  if (c.has264 && c.has265) return preferredH264Info();
   if (c.has265) {
     return {
       kind: 'h265',
@@ -79,15 +83,6 @@ export function toCodecInfo(c: CodecFlags): CodecInfo {
   };
 }
 
-/** 混编时已自动避开 H.265 后的展示文案 */
-export function preferredH264Info(): CodecInfo {
-  return {
-    kind: 'h264',
-    label: '可投屏（已避开 H.265）',
-    hint: '此源也提供 H.265，已自动改用 H.264，方便 AirPlay 出画。',
-  };
-}
-
 /** 在 levels 里找码率最高的 H.264 档，找不到返回 -1 */
 export function findBestH264LevelIndex(
   levels: Array<{ videoCodec?: string; bitrate?: number }>
@@ -106,10 +101,21 @@ export function findBestH264LevelIndex(
   return best;
 }
 
-export function levelListHasHevc(
-  levels: Array<{ videoCodec?: string }>
-): boolean {
+export function levelListHasHevc(levels: Array<{ videoCodec?: string }>): boolean {
   return levels.some((l) => /hvc1|hev1|dvh1|dvhe/i.test(l.videoCodec || ''));
+}
+
+export function levelListHasCodecLabels(levels: Array<{ videoCodec?: string }>): boolean {
+  return levels.some((l) => !!l.videoCodec);
+}
+
+/**
+ * 单段探测若同时命中 H.264/H.265，多为 TS NAL 误判。
+ * HEVC 的 VPS/SPS（32–34）更特异：有则判 H.265；否则判 H.264。
+ */
+export function resolveAmbiguousFlags(flags: CodecFlags): CodecFlags {
+  if (!(flags.has264 && flags.has265)) return flags;
+  return { has264: false, has265: true, hasAv1: flags.hasAv1 };
 }
 
 function proxyUrl(url: string): string {
@@ -148,6 +154,18 @@ export function detectFromBytes(buf: Uint8Array): CodecFlags {
   const out = emptyFlags();
   if (buf.length < 16) return out;
 
+  const fromBox =
+    findFourCC(buf, 'hvc1') ||
+    findFourCC(buf, 'hev1') ||
+    findFourCC(buf, 'hvcC') ||
+    findFourCC(buf, 'dvh1') ||
+    findFourCC(buf, 'dvhe') ||
+    findFourCC(buf, 'avc1') ||
+    findFourCC(buf, 'avc3') ||
+    findFourCC(buf, 'avcC') ||
+    findFourCC(buf, 'av01') ||
+    findFourCC(buf, 'av1C');
+
   if (findFourCC(buf, 'hvc1') || findFourCC(buf, 'hev1') || findFourCC(buf, 'hvcC') || findFourCC(buf, 'dvh1') || findFourCC(buf, 'dvhe')) {
     out.has265 = true;
   }
@@ -157,7 +175,7 @@ export function detectFromBytes(buf: Uint8Array): CodecFlags {
   if (findFourCC(buf, 'av01') || findFourCC(buf, 'av1C')) {
     out.hasAv1 = true;
   }
-  if (hasAnyCodec(out)) return out;
+  if (fromBox) return out;
 
   let isTs = false;
   for (let s = 0; s < Math.min(buf.length, 188); s++) {
@@ -191,7 +209,8 @@ export function detectFromBytes(buf: Uint8Array): CodecFlags {
     if ((nb & 0x80) === 0 && (avcType === 7 || avcType === 8)) out.has264 = true;
   }
 
-  return out;
+  // TS 启发式容易双命中，收敛为单一编码
+  return resolveAmbiguousFlags(out);
 }
 
 function parseMasterChildren(text: string): { flags: CodecFlags; childUrls: string[] } {
@@ -236,15 +255,99 @@ function parseMediaTargets(text: string): string[] {
   return targets;
 }
 
+/** 探测单个 media / master 子清单的编码（不含「跨变体合并」） */
+export async function detectPlaylistFlags(url: string, signal?: AbortSignal): Promise<CodecFlags> {
+  const { text } = await fetchText(url, signal);
+  if (!text.includes('#EXTM3U')) return emptyFlags();
+
+  const fromText = classifyCodecText(text);
+  if (hasAnyCodec(fromText)) return fromText;
+
+  const master = parseMasterChildren(text);
+  if (hasAnyCodec(master.flags)) return master.flags;
+
+  // media playlist：探分片；若仍是 master 无 CODECS，探第一个子清单的分片
+  const mediaUrl = master.childUrls[0];
+  const mediaText = mediaUrl ? (await fetchText(mediaUrl, signal)).text : text;
+  const mediaFlags = classifyCodecText(mediaText);
+  if (hasAnyCodec(mediaFlags)) return mediaFlags;
+
+  for (const target of parseMediaTargets(mediaText).slice(0, 2)) {
+    try {
+      const bytes = await fetchBytes(target, signal);
+      const segFlags = detectFromBytes(bytes);
+      if (hasAnyCodec(segFlags)) return segFlags;
+    } catch {
+      /* continue */
+    }
+  }
+  return emptyFlags();
+}
+
+export type LevelCodecKind = 'h264' | 'h265' | 'av1' | 'unknown';
+
+function flagsToLevelKind(f: CodecFlags): LevelCodecKind {
+  if (f.has264 && !f.has265) return 'h264';
+  if (f.has265 && !f.has264) return 'h265';
+  if (f.has264 && f.has265) return 'h264'; // 单档双命中时按可投屏优先
+  if (f.hasAv1) return 'av1';
+  return 'unknown';
+}
+
+/**
+ * 对 hls.js levels 逐档探测编码（清单常不带 CODECS）。
+ * 返回各档 kind，供播放器锁定 H.264。
+ */
+export async function classifyHlsLevels(
+  levels: Array<{ url?: string | string[]; bitrate?: number }>,
+  signal?: AbortSignal
+): Promise<Array<{ index: number; kind: LevelCodecKind; bitrate: number }>> {
+  const out: Array<{ index: number; kind: LevelCodecKind; bitrate: number }> = [];
+  const limit = Math.min(levels.length, 6);
+  for (let i = 0; i < limit; i++) {
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+    const raw = levels[i]?.url;
+    const url = Array.isArray(raw) ? raw[0] : raw;
+    if (!url) {
+      out.push({ index: i, kind: 'unknown', bitrate: levels[i]?.bitrate ?? 0 });
+      continue;
+    }
+    try {
+      const flags = await detectPlaylistFlags(url, signal);
+      out.push({ index: i, kind: flagsToLevelKind(flags), bitrate: levels[i]?.bitrate ?? 0 });
+    } catch {
+      out.push({ index: i, kind: 'unknown', bitrate: levels[i]?.bitrate ?? 0 });
+    }
+  }
+  return out;
+}
+
+export function pickBestH264FromClassified(
+  classified: Array<{ index: number; kind: LevelCodecKind; bitrate: number }>
+): { h264Indexes: number[]; best: number } | null {
+  const h264Indexes = classified.filter((c) => c.kind === 'h264').map((c) => c.index);
+  if (h264Indexes.length === 0) return null;
+  let best = h264Indexes[0];
+  let bestBr = -1;
+  for (const c of classified) {
+    if (c.kind !== 'h264') continue;
+    if (c.bitrate >= bestBr) {
+      bestBr = c.bitrate;
+      best = c.index;
+    }
+  }
+  return { h264Indexes, best };
+}
+
 /** 探测流媒体编码；signal 用于换集时取消 */
 export async function detectStreamCodec(url: string, signal?: AbortSignal): Promise<CodecInfo> {
   if (!url) {
-    return { kind: 'unknown', label: '编码未知', hint: '无播放地址' };
+    return { kind: 'unknown', label: '编码未识别', hint: '无播放地址' };
   }
 
   const { text } = await fetchText(url, signal);
   if (!text.includes('#EXTM3U')) {
-    return { kind: 'unknown', label: '编码未知', hint: '不是有效的 HLS 清单' };
+    return { kind: 'unknown', label: '编码未识别', hint: '不是有效的 HLS 清单' };
   }
 
   const bodyFlags = classifyCodecText(text);
@@ -253,23 +356,22 @@ export async function detectStreamCodec(url: string, signal?: AbortSignal): Prom
   const master = parseMasterChildren(text);
   if (hasAnyCodec(master.flags)) return toCodecInfo(master.flags);
 
-  const playlists = master.childUrls.length > 0 ? master.childUrls.slice(0, 2) : [null];
+  // 多码率且无 CODECS：逐个子清单探测，再合并（避免只看第一档）
+  if (master.childUrls.length > 1) {
+    let agg = emptyFlags();
+    for (const child of master.childUrls.slice(0, 4)) {
+      if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+      const childFlags = await detectPlaylistFlags(child, signal);
+      agg = mergeFlags(agg, childFlags);
+    }
+    if (hasAnyCodec(agg)) return toCodecInfo(agg);
+  }
 
+  const playlists = master.childUrls.length > 0 ? master.childUrls.slice(0, 1) : [null];
   for (const child of playlists) {
     if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
-    const mediaText = child ? (await fetchText(child, signal)).text : text;
-    const mediaFlags = classifyCodecText(mediaText);
-    if (hasAnyCodec(mediaFlags)) return toCodecInfo(mediaFlags);
-
-    for (const target of parseMediaTargets(mediaText).slice(0, 2)) {
-      try {
-        const bytes = await fetchBytes(target, signal);
-        const segFlags = detectFromBytes(bytes);
-        if (hasAnyCodec(segFlags)) return toCodecInfo(segFlags);
-      } catch {
-        /* 单个分片失败继续试下一个 */
-      }
-    }
+    const flags = child ? await detectPlaylistFlags(child, signal) : await detectPlaylistFlags(url, signal);
+    if (hasAnyCodec(flags)) return toCodecInfo(flags);
   }
 
   return toCodecInfo(emptyFlags());
