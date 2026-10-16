@@ -1,9 +1,10 @@
+# 当前生产默认用 PM2（./scripts/deploy.sh），本文件仅作可选 Docker 回退。
 services:
   libretv:
     build:
       context: .
       dockerfile: Dockerfile
-    # 本地源码构建的镜像；更新上游后执行 ./scripts/update-from-upstream.sh
+    # 可选：sudo docker compose up -d --build
     image: ${LIBRETV_IMAGE:-libretv-local:latest}
     container_name: libretv
     restart: unless-stopped
