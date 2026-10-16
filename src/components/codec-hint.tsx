@@ -11,8 +11,8 @@ import {
 const KIND_STYLE: Record<CodecKind, string> = {
   h264: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300',
   h265: 'border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-200',
-  mixed: 'border-line bg-chip text-content',
-  av1: 'border-line bg-chip text-content',
+  mixed: 'border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-200',
+  av1: 'border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-200',
   unknown: 'border-line bg-chip text-muted',
   detecting: 'border-line bg-chip text-faint',
 };
@@ -48,7 +48,7 @@ export function CodecHint({ url, fromPlayer, className }: CodecHintProps) {
 
     const ac = new AbortController();
     setLoading(true);
-    setProbed({ kind: 'detecting', label: '编码检测中…', hint: '正在分析当前流' });
+    setProbed({ kind: 'detecting', label: '正在识别编码…', hint: '稍后会提示能否投屏' });
 
     detectStreamCodec(url, ac.signal)
       .then((info) => {
@@ -78,8 +78,8 @@ export function CodecHint({ url, fromPlayer, className }: CodecHintProps) {
 
   const shown = info ?? {
     kind: 'detecting' as const,
-    label: '编码检测中…',
-    hint: '正在分析当前流',
+    label: '正在识别编码…',
+    hint: '稍后会提示能否投屏',
   };
 
   return (

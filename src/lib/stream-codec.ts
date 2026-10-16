@@ -47,44 +47,44 @@ export function toCodecInfo(c: CodecFlags): CodecInfo {
   if (c.has265 && c.has264) {
     return {
       kind: 'mixed',
-      label: 'H.264 / H.265',
-      hint: '源含多种编码；播放器无清晰度可选时，AirPlay 能否出画取决于实际拉到的流',
+      label: '投屏不稳定',
+      hint: '此源同时有 H.264 和 H.265。手机/电脑上看一般没问题；投到 Apple TV 若只有声音，请换一个源再试。',
     };
   }
   if (c.has265) {
     return {
       kind: 'h265',
-      label: 'H.265 (HEVC)',
-      hint: 'AirPlay 投屏可能只有声音',
+      label: '投屏可能无画面',
+      hint: '当前是 H.265。本机可正常观看；用 AirPlay 投到 Apple TV 时，常常只有声音没有画面。',
     };
   }
   if (c.has264) {
     return {
       kind: 'h264',
-      label: 'H.264 (AVC)',
-      hint: '适合 AirPlay 投屏',
+      label: '可投屏',
+      hint: '当前是 H.264，AirPlay 投到 Apple TV 一般能正常出画。',
     };
   }
   if (c.hasAv1) {
     return {
       kind: 'av1',
-      label: 'AV1',
-      hint: 'AirPlay 兼容性较差',
+      label: '投屏可能异常',
+      hint: '当前是 AV1，AirPlay 兼容性较差，建议换源后再投屏。',
     };
   }
   return {
     kind: 'unknown',
-    label: '编码未知',
-    hint: '清单未声明 CODECS，且无法从分片识别',
+    label: '编码未识别',
+    hint: '不影响本机播放。若投屏只有声音，多半是 H.265，可换源再试。',
   };
 }
 
-/** 混编时优先 H.264 后的展示文案 */
+/** 混编时已自动避开 H.265 后的展示文案 */
 export function preferredH264Info(): CodecInfo {
   return {
     kind: 'h264',
-    label: 'H.264（已优先）',
-    hint: '源同时含 H.265，已自动锁定 H.264 便于 AirPlay',
+    label: '可投屏（已避开 H.265）',
+    hint: '此源也提供 H.265，已自动改用 H.264，方便 AirPlay 出画。',
   };
 }
 
