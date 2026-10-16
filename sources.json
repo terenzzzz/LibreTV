@@ -1,0 +1,178 @@
+{
+  "name": "LibreTV 点播源",
+  "version": 2,
+  "sources": [
+    {
+      "name": "速播资源",
+      "url": "https://subocaiji.com/api.php/provide/vod"
+    },
+    {
+      "name": "影视工厂(量子)",
+      "url": "https://cj.lziapi.com/api.php/provide/vod"
+    },
+    {
+      "name": "HH资源",
+      "url": "https://hhzyapi.com/api.php/provide/vod"
+    },
+    {
+      "name": "红牛资源",
+      "url": "https://www.hongniuzy2.com/api.php/provide/vod"
+    },
+    {
+      "name": "金鹰点播",
+      "url": "https://jinyingzy.com/api.php/provide/vod"
+    },
+    {
+      "name": "非凡影视",
+      "url": "https://ffzy5.tv/api.php/provide/vod"
+    },
+    {
+      "name": "非凡影视(备用接口)",
+      "url": "http://cj.ffzyapi.com/api.php/provide/vod"
+    },
+    {
+      "name": "暴风资源",
+      "url": "https://bfzyapi.com/api.php/provide/vod"
+    },
+    {
+      "name": "爱奇艺资源站",
+      "url": "https://iqiyizyapi.com/api.php/provide/vod"
+    },
+    {
+      "name": "360资源",
+      "url": "https://360zy.com/api.php/provide/vod"
+    },
+    {
+      "name": "360资源(备用域名)",
+      "url": "https://360zy.net/api.php/provide/vod"
+    },
+    {
+      "name": "魔都资源",
+      "url": "https://www.mdzyapi.com/api.php/provide/vod"
+    },
+    {
+      "name": "猫眼资源",
+      "url": "https://api.maoyanapi.top/api.php/provide/vod"
+    },
+    {
+      "name": "无尽资源",
+      "url": "https://api.wujinapi.com/api.php/provide/vod"
+    },
+    {
+      "name": "百度资源",
+      "url": "https://api.apibdzy.com/api.php/provide/vod"
+    },
+    {
+      "name": "极速资源",
+      "url": "https://jszyapi.com/api.php/provide/vod"
+    },
+    {
+      "name": "茅台资源",
+      "url": "https://caiji.maotaizy.cc/api.php/provide/vod"
+    },
+    {
+      "name": "索尼资源",
+      "url": "https://suoniapi.com/api.php/provide/vod"
+    },
+    {
+      "name": "闪电资源",
+      "url": "https://sdzyapi.com/api.php/provide/vod"
+    },
+    {
+      "name": "光速资源",
+      "url": "https://api.guangsuapi.com/api.php/provide/vod"
+    },
+    {
+      "name": "快车资源",
+      "url": "https://www.kuaichezy.com/api.php/provide/vod"
+    },
+    {
+      "name": "CK资源",
+      "url": "https://ckzy.me/api.php/provide/vod"
+    },
+    {
+      "name": "电影天堂",
+      "url": "http://caiji.dyttzyapi.com/api.php/provide/vod/"
+    },
+    {
+      "name": "金鹰资源",
+      "url": "https://jyzyapi.com/provide/vod"
+    },
+    {
+      "name": "樱花资源网",
+      "url": "https://m3u8.apiyhzy.com/api.php/provide/vod"
+    },
+    {
+      "name": "天涯影视",
+      "url": "https://tyyszyapi.com/api.php/provide/vod"
+    },
+    {
+      "name": "无线资源网",
+      "url": "https://api.wuxianzy.net/api.php/provide/vod"
+    },
+    {
+      "name": "蜂巢片库",
+      "url": "https://api.fczy888.me/api.php/provide/vod"
+    },
+    {
+      "name": "优质资源库",
+      "url": "https://api.1080zyku.com/inc/api.php/provide/vod"
+    },
+    {
+      "name": "卧龙资源",
+      "url": "https://collect.wolongzyw.com/api.php/provide/vod"
+    },
+    {
+      "name": "U酷资源",
+      "url": "https://api.ukuapi.com/api.php/provide/vod"
+    },
+    {
+      "name": "奥斯卡资源网",
+      "url": "https://aosikazy.com/api.php/provide/vod"
+    },
+    {
+      "name": "虎牙资源",
+      "url": "https://www.huyaapi.com/api.php/provide/vod"
+    },
+    {
+      "name": "新浪资源",
+      "url": "https://api.xinlangapi.com/xinlangapi.php/provide/vod"
+    },
+    {
+      "name": "丫丫资源",
+      "url": "https://cj.yayazy.net/api.php/provide/vod"
+    },
+    {
+      "name": "无尽资源(备用域名)",
+      "url": "https://api.wujinapi.me/api.php/provide/vod"
+    },
+    {
+      "name": "最大资源",
+      "url": "https://zuidazy.me/api.php/provide/vod"
+    },
+    {
+      "name": "牛牛资源",
+      "url": "https://api.niuniuzy.me/api.php/provide/vod"
+    },
+    {
+      "name": "爱坤资源",
+      "url": "https://ikunzyapi.com/api.php/provide/vod"
+    },
+    {
+      "name": "豆瓣资源",
+      "url": "https://caiji.dbzy5.com/api.php/provide/vod"
+    },
+    {
+      "name": "如意资源",
+      "url": "https://cj.rycjapi.com/api.php/provide/vod"
+    },
+    {
+      "name": "速播资源(备用)",
+      "url": "https://subocj.com/api.php/provide/vod"
+    },
+    {
+      "name": "淘片资源网",
+      "url": "https://taopianapi.com/cjapi/mc/vod/json.html"
+    }
+  ]
+}

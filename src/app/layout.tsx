@@ -1,10 +1,11 @@
 import type { Metadata, Viewport } from 'next';
+import Script from 'next/script';
 import './globals.css';
 import { Providers } from '@/components/providers';
 
 export const metadata: Metadata = {
   title: {
-    default: 'LibreTV - 免费在线视频搜索与观看平台',
+    default: 'LibreTV',
     template: '%s - LibreTV',
   },
   description:
@@ -42,6 +43,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         />
       </head>
       <body>
+        {/* 播放页编码提示（H.264 / H.265），需尽早挂钩 fetch/XHR */}
+        <Script src="/codec-badge.js" strategy="beforeInteractive" />
         <Providers>{children}</Providers>
       </body>
     </html>

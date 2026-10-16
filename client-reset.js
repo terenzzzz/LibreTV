@@ -1,0 +1,2 @@
+/* backup copy; primary wipe is inlined at <head> start by nginx */
+(function(){var E='2026-10-16-clear-default-sources-v3',F='libretv-data-epoch';try{if(localStorage.getItem(F)===E)return}catch(e){return}try{localStorage.clear();sessionStorage.clear()}catch(e){}try{localStorage.setItem(F,E)}catch(e){}try{location.replace(location.pathname+location.search+(location.search?'&':'?')+'_cr='+encodeURIComponent(E)+location.hash)}catch(e){location.reload()}})();

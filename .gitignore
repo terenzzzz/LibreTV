@@ -3,9 +3,13 @@ node_modules/
 out/
 .env
 .env*.local
+.env.bak*
 *.tsbuildinfo
 vitest-results.json
 *.log
+
+# 部署机本地备份 / 热更新软链
+codec-badge.js
 
 # AI 工具产物（本机会话/缓存数据，不入库）
 .mimosa/
